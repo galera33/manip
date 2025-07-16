@@ -1,187 +1,96 @@
-import time
-import keyboard
-from datetime import datetime
-from dynamixel_sdk import *
-
-LOG_FILE = "registro_movimentos.txt"
-
-class DynamixelMotor:
-    def __init__(self, motor_id, port_handler, protocol=2.0):
-        self.motor_id = motor_id
-        self.port_handler = port_handler
-        self.protocol = protocol
-        self.packet_handler = PacketHandler(protocol)
-
-        if protocol == 2.0:
-            self.ADDR_TORQUE_ENABLE = 64
-            self.ADDR_GOAL_POSITION = 116
-            self.ADDR_PRESENT_POSITION = 132
-            self.ADDR_PROFILE_VELOCITY = 112
-            self.ADDR_PROFILE_ACCELERATION = 108
-        else:
-            self.ADDR_TORQUE_ENABLE = 24
-            self.ADDR_GOAL_POSITION = 30
-            self.ADDR_PRESENT_POSITION = 36
-            self.ADDR_PROFILE_VELOCITY = None
-            self.ADDR_PROFILE_ACCELERATION = None
-
-        self.goal_position = self.get_present_position() or 0
-
-    def enable_torque(self):
-        self.packet_handler.write1ByteTxRx(self.port_handler, self.motor_id, self.ADDR_TORQUE_ENABLE, 1)
-
-    def disable_torque(self):
-        self.packet_handler.write1ByteTxRx(self.port_handler, self.motor_id, self.ADDR_TORQUE_ENABLE, 0)
-
-    def set_profile(self, acceleration, velocity):
-        if self.protocol == 2.0:
-            self.packet_handler.write4ByteTxRx(self.port_handler, self.motor_id, self.ADDR_PROFILE_ACCELERATION, acceleration)
-            self.packet_handler.write4ByteTxRx(self.port_handler, self.motor_id, self.ADDR_PROFILE_VELOCITY, velocity)
-
-    def set_goal_position(self, position):
-        self.goal_position = position
-        self.packet_handler.write4ByteTxRx(self.port_handler, self.motor_id, self.ADDR_GOAL_POSITION, int(position))
-        self.log_movimento(position)
-
-    def get_present_position(self):
-        position, _, _ = self.packet_handler.read4ByteTxRx(self.port_handler, self.motor_id, self.ADDR_PRESENT_POSITION)
-        return position
-
-    def log_movimento(self, position):
-        with open(LOG_FILE, "a") as f:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"{timestamp};MOTOR:{self.motor_id};POSICAO:{position}\n")
+from dynamixel_sdk import PortHandler
+from dynamixel_motor import DynamixelMotor
+from manipulador import Manipulador5DOF
+from sequencia import executar_sequencia
 
 
-class DynamixelMotorDuplo:
-    def __init__(self, motor_a: DynamixelMotor, motor_b: DynamixelMotor):
-        self.motor_a = motor_a  # Motor 6
-        self.motor_b = motor_b  # Motor 7
-        self.goal_position_a = motor_a.get_present_position() or 0
-        self.goal_position_b = motor_b.get_present_position() or 0
-
-    def enable_torque(self):
-        self.motor_a.enable_torque()
-        self.motor_b.enable_torque()
-
-    def disable_torque(self):
-        self.motor_a.disable_torque()
-        self.motor_b.disable_torque()
-
-    def set_profile(self, acceleration, velocity):
-        self.motor_a.set_profile(acceleration, velocity)
-        self.motor_b.set_profile(acceleration, velocity)
-
-    def set_goal_position(self, delta):
-        self.goal_position_a += delta
-        self.goal_position_b -= delta
-        self.motor_a.set_goal_position(self.goal_position_a)
-        self.motor_b.set_goal_position(self.goal_position_b)
-        self.log_movimento(delta)
-
-    def log_movimento(self, delta):
-        with open(LOG_FILE, "a") as f:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"{timestamp};MOTORES:6&7;DELTA:{delta};POS_6:{self.goal_position_a};POS_7:{self.goal_position_b}\n")
-
-
-def controle_motor_individual(motor_id, motores):
-    incremento = 5
-    motor = motores[motor_id]
-    print(f"\n➡️ Controlando Motor {motor_id} (↑ aumenta, ↓ diminui, ESC volta ao menu)")
-
-    try:
-        while True:
-            if keyboard.is_pressed('up'):
-                if isinstance(motor, DynamixelMotorDuplo):
-                    motor.set_goal_position(incremento)
-                    print(f"[Motor 6↑ | Motor 7↓] Pos6: {motor.goal_position_a} | Pos7: {motor.goal_position_b}")
-                else:
-                    motor.goal_position += incremento
-                    motor.set_goal_position(motor.goal_position)
-                    print(f"[Motor {motor_id}] ↑ Posição: {motor.goal_position}")
-                #time.sleep(0.1)
-
-            if keyboard.is_pressed('down'):
-                if isinstance(motor, DynamixelMotorDuplo):
-                    motor.set_goal_position(-incremento)
-                    print(f"[Motor 6↓ | Motor 7↑] Pos6: {motor.goal_position_a} | Pos7: {motor.goal_position_b}")
-                else:
-                    motor.goal_position -= incremento
-                    motor.set_goal_position(motor.goal_position)
-                    print(f"[Motor {motor_id}] ↓ Posição: {motor.goal_position}")
-                #time.sleep(0.1)
-
-            if keyboard.is_pressed('esc'):
-                print("🔙 Voltando ao menu...")
-                break
-
-            #time.sleep(0.05)
-    except KeyboardInterrupt:
-        print("Encerrando controle...")
-
-
-def main():
+if __name__ == "__main__":
     port_handler = PortHandler('COM3')
 
     if not port_handler.openPort():
         print("❌ Erro ao abrir a porta.")
-        return
+        exit()
     if not port_handler.setBaudRate(1000000):
         print("❌ Erro ao configurar a baudrate.")
-        return
+        exit()
 
-    # Criação de motores individuais
-    motores_individuais = {
+    motores = {
         1: DynamixelMotor(1, port_handler),
         2: DynamixelMotor(2, port_handler),
         3: DynamixelMotor(3, port_handler),
         4: DynamixelMotor(4, port_handler),
-        5: DynamixelMotor(10, port_handler),
-        6: DynamixelMotor(6, port_handler, protocol=1.0),
-        7: DynamixelMotor(7, port_handler, protocol=1.0),
+        5: DynamixelMotor(5, port_handler),
     }
 
-    # Motor combinado espelhado
-    motores = motores_individuais.copy()
-    motores[8] = DynamixelMotorDuplo(motores_individuais[6], motores_individuais[7])
-
-    # Ativa torque e define perfil
     for motor in motores.values():
         motor.enable_torque()
-        motor.set_profile(acceleration=30, velocity=60)
+        motor.set_profile(acceleration=5, velocity=10)
+        motor.goal_position = motor.get_present_position()
 
-    # Limpa o log no início
-    open(LOG_FILE, "w").close()
+    manipulador = Manipulador5DOF()
 
     try:
         while True:
-            print("\n=== Controle de Motores Dynamixel ===")
-            print("Escolha um motor para controlar:")
-            for i in range(1, 8):
-                print(f"{i} - Motor {i}")
-            print("8 - Motor 6 e 7 (Espelhados)")
-            print("0 - Sair")
-            opcao = input("Digite o número do motor: ")
+            entrada = input("\n🎯 Digite sequências de posições (bits) separadas por linha ou 'sair':\n"
+                            "Ex: 994,1854,1259,1990,2137\n     1024,2048,2048,2048,2048\n>>> ")
 
-            if opcao == '0':
-                print("Encerrando...")
+            if entrada.strip().lower() in ['sair', 'exit', 'q']:
+                print("⏹️ Saindo do sistema...")
                 break
 
-            try:
-                motor_id = int(opcao)
-                if motor_id in motores:
-                    controle_motor_individual(motor_id, motores)
+            linhas = entrada.strip().split('\n')
+            comandos = []
+            for linha in linhas:
+                try:
+                    posicoes = [int(p.strip()) for p in linha.split(',')]
+                    if len(posicoes) != 5:
+                        print(f"⚠️ Comando inválido: {linha} — esperado 5 posições.")
+                        continue
+                    comandos.append(posicoes)
+                except ValueError:
+                    print(f"❌ Comando inválido (não numérico): {linha}")
+
+            if not comandos:
+                continue
+
+            # Separar comandos válidos e comandos com risco de colisão
+            fila_execucao = []
+            fila_colisao = []
+
+            for comando in comandos:
+                if manipulador.check_collision(comando):
+                    print(f"🚫 Colisão detectada. Aguardando para tentar depois: {comando}")
+                    fila_colisao.append(comando)
                 else:
-                    print("⚠️ Motor inválido.")
-            except ValueError:
-                print("⚠️ Entrada inválida.")
+                    fila_execucao.append(comando)
+
+            # Executa os comandos seguros
+            if fila_execucao:
+                print(f"\n▶️ Executando {len(fila_execucao)} comandos seguros...")
+                executar_sequencia(fila_execucao, motores, manipulador)
+
+            # Tentativa repetida para comandos com colisão
+            tentativas = 3
+            while fila_colisao and tentativas > 0:
+                print(f"\n🔁 Tentativa de execução dos {len(fila_colisao)} comandos com colisão... ({tentativas} restantes)")
+                nova_fila_colisao = []
+                for comando in fila_colisao:
+                    if manipulador.check_collision(comando):
+                        print(f"🚫 Ainda em colisão: {comando}")
+                        nova_fila_colisao.append(comando)
+                    else:
+                        print(f"✅ Agora seguro: {comando}")
+                        executar_sequencia([comando], motores, manipulador)
+                fila_colisao = nova_fila_colisao
+                tentativas -= 1
+
+            if fila_colisao:
+                print(f"\n⚠️ Os seguintes comandos foram ignorados após {3} tentativas por risco persistente de colisão:")
+                for c in fila_colisao:
+                    print(f"   - {c}")
 
     finally:
-        for motor in motores.values():
-            motor.disable_torque()
+        for m in motores.values():
+            m.disable_torque()
         port_handler.closePort()
         print("✅ Porta serial fechada.")
-
-if __name__ == "__main__":
-    main()
